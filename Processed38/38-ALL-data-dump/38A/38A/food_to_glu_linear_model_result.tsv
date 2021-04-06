@@ -1,0 +1,17 @@
+	meal 1	meal 2	meal 3	meal 4	meal 5	meal 6	meal 7	meal 8	meal 9
+LinearRegression									
+SVR									
+SGDRegressor									
+BayesianRidge									
+LassoLars									
+ARDRegression									
+PassiveAggressiveRegressor									
+TheilSenRegressor									
+KNeighborsRegressor									
+									
+									
+									
+									
+									
+									
+									
