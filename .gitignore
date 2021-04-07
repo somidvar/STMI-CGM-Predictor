@@ -1,0 +1,9 @@
+#OS junk files
+*.DS_Store
+
+#Pycharm
+*.idea
+*.ipynb_checkpoints
+
+#Saved variables and models
+*.pkl
