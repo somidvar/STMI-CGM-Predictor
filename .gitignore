@@ -1,9 +1,15 @@
 #OS junk files
 *.DS_Store
 
+#Pictures
+*.png
+*.jpg
+*.jpeg
+
 #Pycharm
 *.idea
 *.ipynb_checkpoints
 
 #Saved variables and models
 *.pkl
+*.npy
