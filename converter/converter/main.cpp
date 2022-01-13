@@ -15,19 +15,25 @@ int main()
         input_file.open((path +to_string(counter)+ "_cm_all.csv"), ios::in);
         char delimiter = ',';
         getline(input_file, lineContent);
-        allContent += "Time,Ax,Ay,Az,Rx,Ry,Rz,Yaw,Roll,Pitch\n";
+        allContent += "Time,Ax,Ay,Az,Rx,Ry,Rz,Yaw,Roll,Pitch";
         while(getline(input_file, lineContent))
         {
+            allContent+="\r\n";
             string tempStr;
-            size_t pos1, pos2;
+            size_t pos1, pos2,pos3;
             pos1 = 0;
             pos2 = 0;
+            pos3=0;
             for (int i = 0; i < 2; i++)
             {
                 pos1 = lineContent.find(delimiter, pos1 + 1);
                 pos2 = lineContent.find(delimiter, pos1 + 1);
+                pos3=lineContent.find("-05:00");
             }
-            allContent += lineContent.substr(pos1 + 1, 26) + lineContent.substr(pos2) + "\n";
+            if(pos3>1000){//the daylight saving!
+                pos3=lineContent.find("-06:00");
+            }
+            allContent += lineContent.substr(pos1 + 1, pos3-pos1-1) + lineContent.substr(pos3+6);
         }
 
         input_file.close();
