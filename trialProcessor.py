@@ -64,7 +64,7 @@ COMPLEX_MEAL_DURATION = timedelta(minutes=60)
 START_OF_TRIAL = [datetime.strptime("11 06 2021-04:00:00", "%m %d %Y-%H:%M:%S"), datetime.strptime("02 03 2022-00:00:00", "%m %d %Y-%H:%M:%S")]
 END_OF_TRIAL = [datetime.strptime("11 15 2021-00:00:00", "%m %d %Y-%H:%M:%S"), datetime.strptime("02 13 2022-00:00:00", "%m %d %Y-%H:%M:%S")]
 DAY_LIGHT_SAVING = datetime.strptime("11 06 2021-02:00:00", "%m %d %Y-%H:%M:%S")
-coreNumber = 36
+coreNumber = 24
 
 addDataPrefix = "/Users/sorush/My Drive/Documents/Educational/TAMU/Research/TAMU/"
 if not os.path.exists(addDataPrefix):
@@ -76,7 +76,9 @@ addUserInput = os.path.join(addDataPrefix, "User inputted")
 addHKCM = os.path.join(addDataPrefix, "hk+cm")
 addCGM = os.path.join(addDataPrefix, "CGM")
 addE4 = os.path.join(addDataPrefix, "E4")
-addResults = os.path.join(addDataPrefix, "Results")
+addResults = os.path.join(addDataPrefix, "Results"+sys.argv[1])
+if not os.path.exists(addResults):
+    os.mkdir(addResults)
 
 exempts = ["p2", "p4"]
 
@@ -87,7 +89,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""  # no GPU
 
 warnings.filterwarnings("ignore")
 pd.set_option("display.max_rows", 500)
-
 
 # %%
 # participants=list(set(dfMeal['Participant'].to_list()))
@@ -863,10 +864,10 @@ def outterNegWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4
         protein = 0
 
         windowDatas.append([outterWindowStart, outterWindowEnd, innerWindowNumber, carbs, fat, protein, 0, participant])
-    # for counterOuter in tqdm(range(len(windowDatas))):
-    #     windowData = windowDatas[counterOuter]
-    #     participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
-    participantDataList = Parallel(n_jobs=coreNumber)(delayed(parallelCall)(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM) for windowData in tqdm(windowDatas))
+    for counterOuter in tqdm(range(len(windowDatas))):
+        windowData = windowDatas[counterOuter]
+        participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
+    # participantDataList = Parallel(n_jobs=coreNumber)(delayed(parallelCall)(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM) for windowData in tqdm(windowDatas))
     return participantDataList
 
 
@@ -888,10 +889,10 @@ def outterPosWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4
         protein = dfParticipantMeal["Protein"].iloc[counterOuter]
 
         windowDatas.append([outterWindowStart, outterWindowEnd, innerWindowNumber, carbs, fat, protein, 1, participant])
-    # for counterOuter in tqdm(range(len(windowDatas))):
-    #     windowData = windowDatas[counterOuter]
-    #     participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
-    participantDataList = Parallel(n_jobs=coreNumber)(delayed(parallelCall)(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM) for windowData in tqdm(windowDatas))
+    for counterOuter in tqdm(range(len(windowDatas))):
+        windowData = windowDatas[counterOuter]
+        participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
+    # participantDataList = Parallel(n_jobs=coreNumber)(delayed(parallelCall)(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM) for windowData in tqdm(windowDatas))
     return participantDataList
 
 
