@@ -1,14 +1,10 @@
 # %%
 from datetime import datetime, timedelta, timezone
-from dateutil.tz import tzutc
-from dateutil.relativedelta import relativedelta
 import os
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import random
-import math
 from scipy.stats import pearsonr, mode, skew, kurtosis, linregress
 import xgboost as xgb
 from joblib import Parallel, delayed
@@ -19,14 +15,9 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, Sh
 from imblearn.over_sampling import SMOTE
 from sklearn.utils.multiclass import type_of_target
 from sklearn.metrics import mean_squared_error as MSE
-from sklearn.model_selection import KFold
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import SelectFromModel
 import zipfile
 import warnings
 import seaborn as sns
-import sys
-from copy import deepcopy
 
 # sns.set_style("white")
 
@@ -47,12 +38,14 @@ CM_LAG_CORRECTION = [
     # ("p8", datetime.strptime("02 06 2022-07:20:00", "%m %d %Y-%H:%M:%S"),datetime.strptime("02 09 2022-00:00:00", "%m %d %Y-%H:%M:%S"),timedelta(minutes=-165-190)),
     # ("p8", datetime.strptime("02 09 2022-07:20:00", "%m %d %Y-%H:%M:%S"),datetime.strptime("02 14 2022-00:00:00", "%m %d %Y-%H:%M:%S"),timedelta(minutes=93)),
 ]
+# CGM_LAG_IMPOSING_STR = sys.argv[1]# ONLY TO IMPOSE A TIME LAG BETWEEN CGM READINGS AND CORE MOTION DATA!!!! WATCH OUT AND USE IT CAUTIOUSLY
+CGM_LAG_IMPOSING_STR = "0"
+# OUTTER_WINDOW_LENGTH = timedelta(minutes=int(sys.argv[2]))
 
-CGM_LAG_IMPOSING = timedelta(minutes=int(sys.argv[1]))# ONLY TO IMPOSE A TIME LAG BETWEEN CGM READINGS AND CORE MOTION DATA!!!! WATCH OUT AND USE IT CAUTIOUSLY
-OUTTER_WINDOW_LENGTH = timedelta(minutes=int(sys.argv[2]))
-print("Staring a new round##################",OUTTER_WINDOW_LENGTH)
-# CGM_LAG_IMPOSING = timedelta(minutes=30)# ONLY TO IMPOSE A TIME LAG BETWEEN CGM READINGS AND CORE MOTION DATA!!!! WATCH OUT AND USE IT CAUTIOUSLY
-# OUTTER_WINDOW_LENGTH = timedelta(minutes=45)
+
+CGM_LAG_IMPOSING = timedelta(minutes=int(CGM_LAG_IMPOSING_STR))  # ONLY TO IMPOSE A TIME LAG BETWEEN CGM READINGS AND CORE MOTION DATA!!!! WATCH OUT AND USE IT CAUTIOUSLY
+OUTTER_WINDOW_LENGTH = timedelta(minutes=60)
+OUTTER_WINDOW_STEP = timedelta(minutes=15)
 FASTING_LENGTH = timedelta(minutes=30)
 BIG_MEAL_CALORIE = 200
 FOLD_NUMBER = 5
@@ -64,7 +57,7 @@ COMPLEX_MEAL_DURATION = timedelta(minutes=60)
 START_OF_TRIAL = [datetime.strptime("11 06 2021-04:00:00", "%m %d %Y-%H:%M:%S"), datetime.strptime("02 03 2022-00:00:00", "%m %d %Y-%H:%M:%S")]
 END_OF_TRIAL = [datetime.strptime("11 15 2021-00:00:00", "%m %d %Y-%H:%M:%S"), datetime.strptime("02 13 2022-00:00:00", "%m %d %Y-%H:%M:%S")]
 DAY_LIGHT_SAVING = datetime.strptime("11 06 2021-02:00:00", "%m %d %Y-%H:%M:%S")
-coreNumber = 24
+coreNumber = 18
 
 addDataPrefix = "/Users/sorush/My Drive/Documents/Educational/TAMU/Research/TAMU/"
 if not os.path.exists(addDataPrefix):
@@ -76,7 +69,7 @@ addUserInput = os.path.join(addDataPrefix, "User inputted")
 addHKCM = os.path.join(addDataPrefix, "hk+cm")
 addCGM = os.path.join(addDataPrefix, "CGM")
 addE4 = os.path.join(addDataPrefix, "E4")
-addResults = os.path.join(addDataPrefix, "Results"+sys.argv[1])
+addResults = os.path.join(addDataPrefix, "Results" + str(CGM_LAG_IMPOSING_STR))
 if not os.path.exists(addResults):
     os.mkdir(addResults)
 
@@ -89,6 +82,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""  # no GPU
 
 warnings.filterwarnings("ignore")
 pd.set_option("display.max_rows", 500)
+
 
 # %%
 # participants=list(set(dfMeal['Participant'].to_list()))
@@ -403,6 +397,7 @@ if not os.path.exists(os.path.join(addResults, "All_cm.pkl")):
                         dfCM = dfTemp
     print("Processing is done")
     dfCM = cmLagCorrector(dfCM)
+    dfCM = trialTimeLimitter(dfCM, "Time")
     dfCM.sort_values(["Participant", "Time"], ascending=(True, True), inplace=True)
     dfCM.reset_index(drop=True, inplace=True)
     print("CM database is limited to the trial period")
@@ -533,6 +528,31 @@ if not os.path.exists(os.path.join(addResults, "All_E4.pkl")):
     dfE4.to_pickle(os.path.join(addResults, "All_E4.pkl"))
 else:
     dfE4 = pd.read_pickle(os.path.join(addResults, "All_E4.pkl"))
+
+
+# %%
+participants = list(set(dfCGM["Participant"].to_list()))
+participants.sort()
+for participant in participants:
+    dfCGMTemp = dfCGM[dfCGM["Participant"] == participant]
+    dfMealTemp = dfMeal[dfMeal["Participant"] == participant]
+    riseDuration = []
+    for counter in range(len(dfMealTemp) - 1):
+        currentMealStart = dfMealTemp.iloc[counter]["StartTime"]
+        cgmValBase = dfCGMTemp[dfCGMTemp["Time"] == currentMealStart]
+
+        assert len(cgmValBase) == 1
+        cgmValBase = cgmValBase["Abbot"].values[0]
+        for counter in range(45):
+            timeTempMin = timedelta(minutes=counter)
+            cgmVal = dfCGMTemp[dfCGMTemp["Time"] == currentMealStart + timeTempMin]
+            assert len(cgmVal) == 1
+            cgmVal = cgmVal["Abbot"].values[0]
+            if cgmVal - cgmValBase >= 15:
+                riseDuration.append([counter, cgmValBase, cgmVal])
+                break
+    riseDuration = np.asarray(riseDuration)
+    print("BG average rise time for each participants over all meals:", participant, np.mean(riseDuration[:, 0]))
 
 
 # %%
@@ -742,6 +762,68 @@ def motionCalculator(df):
     return [f1.mean(), f1.std(), f1.max() - f1.min(), f2.mean(), f2.std(), f2.max() - f2.min()]
 
 
+def CGMStatFeatures(dataList):
+    dataList = np.asarray(dataList).astype(float)
+    result = []
+    dataDim = dataList.ndim
+    assert dataDim == 1
+    assert len(dataList) == len(dataList[~np.isnan(dataList)])
+    dataList = dataList[~np.isnan(dataList)]
+
+    meanVal = np.nanmean(dataList)
+    stdVal = np.nanstd(dataList)
+    minVal = np.nanmin(dataList)
+    maxVal = np.nanmax(dataList)
+    rangeVal = maxVal - minVal
+    skewnessVal = skew(dataList, nan_policy="omit")
+    kurtosisVal = kurtosis(dataList, nan_policy="omit")
+
+    tempSize = int(len(dataList) / 4)
+    firstFourthSlopeVal = np.mean(dataList[0:tempSize])
+    secondFourthSlopeVal = np.mean(dataList[tempSize : 2 * tempSize])
+    thirdFourthSlopeVal = np.mean(dataList[2 * tempSize : 3 * tempSize])
+    forthFourthSlopeVal = np.mean(dataList[4 * tempSize :])
+
+    dataListDiff = np.diff(dataList)
+    meanDiff = np.nanmean(dataListDiff)
+    stdDiff = np.nanstd(dataListDiff)
+    minDiff = np.nanmin(dataListDiff)
+    maxDiff = np.nanmax(dataListDiff)
+    rangeDiff=maxDiff-minDiff
+
+    tempSize = int(len(dataListDiff) / 4)
+    firstFourthSlopeDiff = np.mean(dataListDiff[0:tempSize])
+    secondFourthSlopeDiff = np.mean(dataListDiff[tempSize : 2 * tempSize])
+    thirdFourthSlopeDiff = np.mean(dataListDiff[2 * tempSize : 3 * tempSize])
+    forthFourthSlopeDiff = np.mean(dataListDiff[3 * tempSize :])
+
+    result.extend([
+            rangeVal,
+            meanVal,
+            stdVal,
+            minVal,
+            maxVal,
+            skewnessVal,
+            kurtosisVal,
+            firstFourthSlopeVal,
+            secondFourthSlopeVal,
+            thirdFourthSlopeVal,
+            forthFourthSlopeVal,
+            forthFourthSlopeVal + thirdFourthSlopeVal - firstFourthSlopeVal - secondFourthSlopeVal,
+            rangeDiff,
+            meanDiff,
+            stdDiff,
+            minDiff,
+            maxDiff,
+            firstFourthSlopeDiff,
+            secondFourthSlopeDiff,
+            thirdFourthSlopeDiff,
+            forthFourthSlopeDiff,
+            forthFourthSlopeDiff + thirdFourthSlopeDiff - firstFourthSlopeDiff - secondFourthSlopeDiff,
+    ])
+    return result
+
+
 def statFeatures(dataList):
     dataList = np.asarray(dataList).astype(float)
     result = []
@@ -816,7 +898,8 @@ def parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM)
 
     dfTempCGM = dfParticipantCGM[(dfParticipantCGM["Time"] >= outterWindowStart) & (dfParticipantCGM["Time"] < outterWindowEnd)]
     tempListCGM = dfTempCGM["Abbot"].to_list()
-    tempListCGM = statFeatures(tempListCGM)
+    # tempListCGM = statFeatures(tempListCGM)#I changed the stat feature calculator to consider the slope of BG
+    tempListCGM = CGMStatFeatures(tempListCGM)
     tempList.extend(tempListCGM)  # 7
 
     tempList.append(outterWindowStart)  # 1
@@ -829,66 +912,31 @@ def parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM)
 
     tempList.append(mealFlag)  # mealFlag
 
-    assert len(tempList) == 1 + 21 + 7 + 3 + 3 + 1
-
+    assert len(tempList) == 1 + 21 + 22 + 3 + 3 + 1
     return tempList
 
 
-def outterNegWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant):
-    print("Negative windows:")
+def outterWindowExtractorTotal(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant):
+    print("All windows:")
     participantDataList = []
-    gaps = []
-    for counterOuter in range(1, len(dfParticipantMeal)):
-        if dfParticipantMeal["StartTime"].iloc[counterOuter] - dfParticipantMeal["StartTime"].iloc[counterOuter - 1] >= FASTING_LENGTH:
-            # if not dfParticipantMeal["ComplexMeal"].iloc[counterOuter]:
-            counter = 0
-            while True:
-                endQuerry = dfParticipantMeal["StartTime"].iloc[counterOuter] - counter * OUTTER_WINDOW_LENGTH
-                startQuerry = endQuerry - OUTTER_WINDOW_LENGTH
-                if startQuerry > dfParticipantMeal["StartTime"].iloc[counterOuter - 1] + FASTING_LENGTH:
-                    gaps.append([startQuerry, endQuerry])
-                else:
-                    break
-                if counter == 50:  # Each positive window can have 10 negative winodws at most
-                    break
-                counter += 1
     windowDatas = []
-    for counterOuter in range(len(gaps)):
-        element = gaps[counterOuter]
-        outterWindowStart = element[0]
-        outterWindowEnd = element[1]
+    experimentStart = dfParticipantCM["Time"].min()
+    experimentEnd = dfParticipantCM["Time"].max()
+
+    startQuerry = experimentStart
+    endQuerry = startQuerry + OUTTER_WINDOW_LENGTH
+    while endQuerry <= experimentEnd:
         innerWindowNumber = int(OUTTER_WINDOW_LENGTH.total_seconds() / INNER_WINDOW_LENGTH.total_seconds())
+        dfTempMeal = dfParticipantMeal[(dfParticipantMeal["StartTime"] >= startQuerry) & (dfParticipantMeal["StartTime"] <= endQuerry - timedelta(minutes=15))]
 
-        carbs = 0
-        fat = 0
-        protein = 0
+        mealFlag = min(len(dfTempMeal), 1)
+        carbs = dfTempMeal["Carbs"].sum()
+        fat = dfTempMeal["Fat"].sum()
+        protein = dfTempMeal["Protein"].sum()
 
-        windowDatas.append([outterWindowStart, outterWindowEnd, innerWindowNumber, carbs, fat, protein, 0, participant])
-    for counterOuter in tqdm(range(len(windowDatas))):
-        windowData = windowDatas[counterOuter]
-        participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
-    # participantDataList = Parallel(n_jobs=coreNumber)(delayed(parallelCall)(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM) for windowData in tqdm(windowDatas))
-    return participantDataList
-
-
-def outterPosWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant):
-    print("Positive windows:")
-    windowDatas = []
-    participantDataList = []
-    for counterOuter in range(len(dfParticipantMeal)):
-        # if not dfParticipantMeal["BigMeal"].iloc[counterOuter]:
-        #     continue
-        # if dfParticipantMeal["ComplexMeal"].iloc[counterOuter]:
-        #     continue
-        outterWindowStart = dfParticipantMeal["StartTime"].iloc[counterOuter]
-        outterWindowEnd = outterWindowStart + OUTTER_WINDOW_LENGTH
-        innerWindowNumber = int(OUTTER_WINDOW_LENGTH.total_seconds() / INNER_WINDOW_LENGTH.total_seconds())
-
-        carbs = dfParticipantMeal["Carbs"].iloc[counterOuter]
-        fat = dfParticipantMeal["Fat"].iloc[counterOuter]
-        protein = dfParticipantMeal["Protein"].iloc[counterOuter]
-
-        windowDatas.append([outterWindowStart, outterWindowEnd, innerWindowNumber, carbs, fat, protein, 1, participant])
+        windowDatas.append([startQuerry, endQuerry, innerWindowNumber, carbs, fat, protein, mealFlag, participant])
+        startQuerry += OUTTER_WINDOW_STEP
+        endQuerry += OUTTER_WINDOW_STEP
     for counterOuter in tqdm(range(len(windowDatas))):
         windowData = windowDatas[counterOuter]
         participantDataList.append(parallelCall(windowData, dfParticipantCM, dfParticipantE4, dfParticipantCGM))
@@ -902,22 +950,30 @@ def main():
     participants = list(set(participants))
     participants.sort()
     columnHeaderList = ["CM"]
-    sensors = ["EDA", "HR", "Temperature", "CGM"]
+    sensors = ["EDA", "HR", "Temperature"]
     statFeatureNames = ["-Mean", "-Std", "-Min", "-Max", "-Range", "-Skewness", "-Kurtosis"]
     for sensor in sensors:
         for statFeatureName in statFeatureNames:
             columnHeaderList.append(sensor + statFeatureName)
+    sensors = ["CGM"]
+    statFeatureNames = ["-Range", "-Mean", "-STD", "-Min", "-Max", "-Skewness", "-Kurtosis","-FirstFourthSlope","-SecondFourthSlope","-ThirdFourthSlope","-FourthFourthSlope","-HalvesSlope",
+    "-RangeDiff","-MeanDiff", "-STDDiff", "-MinDiff", "-MaxDiff", "-FirstFourthSlopeDiff","-SecondFourthSlopeDiff","-ThirdFourthSlopeDiff","-FourthFourthSlopeDiff","-HalvesSlopeDiff"]
+    for sensor in sensors:
+        for statFeatureName in statFeatureNames:
+            columnHeaderList.append(sensor + statFeatureName)
+
     columnHeaderList.extend(["StartTime", "FinishTime", "Participant", "Carb", "Fat", "Protein", "MealLabel"])
     for participant in participants:
         print("Participant:", participant)
         if participant in exempts:
             continue
+        # if participant!='p8':
+        #     continue
         dfParticipantMeal = dfMeal[dfMeal["Participant"] == participant]
         dfParticipantCM = dfCM[dfCM["Participant"] == participant]
         dfParticipantE4 = dfE4[dfE4["Participant"] == participant]
         dfParticipantCGM = dfCGM[dfCGM["Participant"] == participant]
-        participantDataList = outterPosWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant)
-        participantDataList.extend(outterNegWindowExtractor(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant))
+        participantDataList = outterWindowExtractorTotal(dfParticipantMeal, dfParticipantCM, dfParticipantE4, dfParticipantCGM, participant)
 
         participantDataList = pd.DataFrame(participantDataList, columns=columnHeaderList)
         if len(allDataList) == 0:
@@ -943,11 +999,10 @@ def main():
     return allDataList
 
 
-# if os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl"))):
-#     os.remove(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl")))
+if os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl"))):
+    os.remove(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl")))
 if not os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl"),)):
     dfAllFeatures = main()
-
 else:
     dfAllFeatures = pd.read_pickle(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl"),))
 
@@ -970,15 +1025,17 @@ def cmNormalizerPredictor(element, cmDataMean, cmDataStd, hooverModel):
     element -= cmDataMean
     element /= cmDataStd
     element = np.expand_dims(element, axis=0)
+    # print(element)
     hooverPrediction = hooverModel.predict_proba(element)
     hooverPrediction = hooverPrediction[0, 1]
 
     return hooverPrediction
 
 
-def maxProbWinodFinder(tempPredictions):
+def maxProbWinodFinder(tempPredictions):  # we are finding the maximum probability for a 5-min period which is located 15-min sooner than the end of the windows 15+5=20 min
+    assert OUTTER_WINDOW_LENGTH >= timedelta(minutes=20)
     tempMax = -1
-    for innerCounter in range(len(tempPredictions) - 5):
+    for innerCounter in range(len(tempPredictions) - 20):
         tempArray = np.asarray(tempPredictions[innerCounter : innerCounter + 5])
         tempArray = np.mean(tempArray)
         if tempArray > tempMax:
@@ -1000,7 +1057,6 @@ def hooverPredictor(dfAllFeatures):
     for participant in participants:
         dfTemp = dfAllFeatures[dfAllFeatures["Participant"] == participant]
         cmDataMean, cmDataStd = meanSTDFinder(dfTemp)
-
         predictions = []
         groundTruth = []
         for counter in tqdm(range(len(dfTemp))):
@@ -1045,17 +1101,21 @@ def hooverPredictor(dfAllFeatures):
 
 
 dfAllFeatures = pd.read_pickle(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features.pkl")))
+print(dfAllFeatures)
+raise
 dfAllFeaturesHoover = hooverPredictor(dfAllFeatures)
+dfAllFeaturesHoover = dfAllFeaturesHoover.dropna()
 dfAllFeaturesHoover.to_excel(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features-AfterHoover.xlsx")), index=False)
 
 
 # %%
 def xgClassifier(xTrain, xTest, yTrain, yTest):
-    clf = xgb.XGBClassifier(scale_pos_weight=len(yTrain) / np.sum(yTrain), n_jobs=coreNumber, n_estimators=250, max_depth=4, objective="binary:logistic", eval_metric="error",)
+    clf = xgb.XGBClassifier(scale_pos_weight=len(yTrain) / np.sum(yTrain), n_jobs=coreNumber, n_estimators=250, max_depth=3, objective="binary:logistic", eval_metric="error",)
     clf.fit(xTrain, yTrain)
 
     predictionsTest = clf.predict_proba(xTest)
     predictionsTest = predictionsTest[:, 1]
+    rocAuc = roc_auc_score(yTest, predictionsTest)
 
     # fpr, tpr, thresholds = roc_curve(yTest, predictionsTest, pos_label=1)
     # plt.xlabel("FPR")
@@ -1065,17 +1125,13 @@ def xgClassifier(xTrain, xTest, yTrain, yTest):
     # plt.plot([0, 0], [1, 1], color="red")
     # plt.show()
 
-    predictionsTest[predictionsTest >= 0.5] = 1
-    predictionsTest[predictionsTest < 0.5] = 0
-
+    predictionsTest = clf.predict(xTest)
     accuracy = sklearn.metrics.accuracy_score(yTest, predictionsTest)
     recall = sklearn.metrics.recall_score(yTest, predictionsTest)
     precision = sklearn.metrics.precision_score(yTest, predictionsTest)
     f1Score = sklearn.metrics.f1_score(yTest, predictionsTest, average="weighted")
-    rocAuc = roc_auc_score(yTest, predictionsTest)
 
-    # print(np.round(recall, 3), "\t", np.round(precision, 3), "\t", np.round(f1Score, 3), "\t", np.round(rocAuc, 3), "\t", len(yTest) - np.sum(yTest), "\t", np.sum(yTest), "\t", np.round(accuracy, 3))
-    return [rocAuc, accuracy, recall, precision, f1Score, len(yTest) - np.sum(yTest), np.sum(yTest)]
+    return [rocAuc, accuracy, recall, precision, f1Score, np.sum(yTest), len(yTest) - np.sum(yTest)]
 
 
 def testTrainSplit(dfParticipant, participant, combination, normalFlag):
@@ -1149,6 +1205,9 @@ if os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + st
     os.remove(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-Final-Classifier.xlsx")))
 if not os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-Final-Classifier.xlsx"))):
     dfAllFeaturesHoover = pd.read_excel(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-All-Features-AfterHoover.xlsx")))
+    print(len(dfAllFeaturesHoover))
+    dfAllFeaturesHoover = dfAllFeaturesHoover.dropna()
+    print(len(dfAllFeaturesHoover))
     combinations = [["CGM"], ["CM"], ["CGM", "CM"], ["CGM", "CM", "Temperature"], ["CGM", "CM", "Temperature", "HR", "EDA"]]
     columns = dfAllFeaturesHoover.columns
     headersClassifier = ["ROC-AUC", "Accuracy", "Recall", "Precision", "F1", "TestPositive", "TestNegative", "Participant", "Combination", "SetNumber"]
@@ -1179,7 +1238,6 @@ if not os.path.exists(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" 
 else:
     dfClassifier = pd.read_excel(os.path.join(addResults, (str(OUTTER_WINDOW_LENGTH) + "-" + str(FASTING_LENGTH) + "-Final-Classifier.xlsx")))
 foldSummarizerBinary(dfClassifier)
-
 
 
 # %%
@@ -1243,7 +1301,7 @@ subplotCounter = 1
 fig = plt.figure(figsize=(10, 15))
 colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
 for participant in participants:
-    metricName = "Precision"
+    metricName = "Recall"
     metricCMList, metricCGMList, metricCGMCMList, metricCGMCMTempList, metricCGMCMTempHREDAList, windowLenList = summaryPlotter(participant, metricName)
     slopeCGM, interceptCGM, r_valueCGM, p_valueCGM, std_errCGM = linregress(windowLenList, metricCGMList)
     slopeCM, interceptCM, r_valueCM, p_valueCM, std_errCM = linregress(windowLenList, metricCMList)
